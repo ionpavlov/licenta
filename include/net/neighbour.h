@@ -2,7 +2,7 @@
 #define _NET_NEIGHBOUR_H
 
 #include <linux/neighbour.h>
-
+#include <net/rdtsc.h>
 /*
  *	Generic neighbour manipulation
  *

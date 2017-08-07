@@ -51,6 +51,7 @@
 #include <linux/prefetch.h>
 #include <scsi/fc/fc_fcoe.h>
 #include <net/vxlan.h>
+#include <net/rdtsc.h>
 
 #ifdef CONFIG_OF
 #include <linux/of_net.h>
@@ -2053,6 +2054,11 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int mss = 0;
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t total_cycles_ixgbe_alloc_rx_buffers = 0;
+	static uint64_t total_cycles_ixgbe_fetch_rx_buffer = 0;
+	static uint64_t total_cycles_ixgbe_process_skb_fields = 0;
 
 	while (likely(total_rx_packets < budget)) {
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -2060,7 +2066,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= IXGBE_RX_BUFFER_WRITE) {
+			delta = rdtsc();
 			ixgbe_alloc_rx_buffers(rx_ring, cleaned_count);
+			delta = rdtsc() - delta;
+			total_cycles_ixgbe_alloc_rx_buffers += delta;
 			cleaned_count = 0;
 		}
 
@@ -2075,8 +2084,12 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		 */
 		dma_rmb();
 
+
+		delta = rdtsc();
 		/* retrieve a buffer from the ring */
 		skb = ixgbe_fetch_rx_buffer(rx_ring, rx_desc);
+		delta = rdtsc() - delta;
+		total_cycles_ixgbe_fetch_rx_buffer += delta;
 
 		/* exit if we failed to retrieve a buffer */
 		if (!skb)
@@ -2095,8 +2108,11 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
 
+		delta = rdtsc();
 		/* populate checksum, timestamp, VLAN, and protocol */
 		ixgbe_process_skb_fields(rx_ring, rx_desc, skb);
+		delta = rdtsc() - delta;
+		total_cycles_ixgbe_process_skb_fields += delta;
 
 #ifdef IXGBE_FCOE
 		/* if ddp, not passing to ULD unless for FCP_RSP or error */
@@ -2128,6 +2144,16 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 		/* update budget accounting */
 		total_rx_packets++;
+	}
+
+	/* count processed packets */
+	counter += total_rx_packets;
+	/* print times on PKTSTAMP */
+	if (counter == PKTSTAMP) {
+		printk(KERN_INFO "%s:%d (%s) PKTSTAMP = %d", __FILE__, __LINE__, __FUNCTION__, PKTSTAMP);
+		printk(KERN_INFO "total_cycles_ixgbe_alloc_rx_buffers = %lld\n", total_cycles_ixgbe_alloc_rx_buffers);
+		printk(KERN_INFO "total_cycles_ixgbe_fetch_rx_buffer = %lld\n", total_cycles_ixgbe_fetch_rx_buffer);
+		printk(KERN_INFO "total_cycles_ixgbe_process_skb_fields = %lld\n", total_cycles_ixgbe_process_skb_fields);
 	}
 
 	u64_stats_update_begin(&rx_ring->syncp);

@@ -79,6 +79,7 @@
 #include <linux/mroute.h>
 #include <linux/netlink.h>
 #include <linux/tcp.h>
+#include <net/rdtsc.h>
 
 int sysctl_ip_default_ttl __read_mostly = IPDEFTTL;
 EXPORT_SYMBOL(sysctl_ip_default_ttl);
@@ -180,6 +181,11 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	unsigned int hh_len = LL_RESERVED_SPACE(dev);
 	struct neighbour *neigh;
 	u32 nexthop;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	if (rt->rt_type == RTN_MULTICAST) {
 		IP_UPD_PO_STATS(net, IPSTATS_MIB_OUTMCAST, skb->len);
@@ -206,6 +212,11 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+			printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
 	if (!IS_ERR(neigh)) {
 		int res = dst_neigh_output(dst, neigh, skb);
 

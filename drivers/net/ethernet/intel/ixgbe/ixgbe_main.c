@@ -2055,7 +2055,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
 	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t counter = 0;
 	static uint64_t total_cycles_ixgbe_alloc_rx_buffers = 0;
 	static uint64_t total_cycles_ixgbe_fetch_rx_buffer = 0;
 	static uint64_t total_cycles_ixgbe_process_skb_fields = 0;

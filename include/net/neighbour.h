@@ -450,6 +450,11 @@ static inline int neigh_hh_output(const struct hh_cache *hh, struct sk_buff *skb
 {
 	unsigned int seq;
 	int hh_len;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	do {
 		seq = read_seqbegin(&hh->hh_lock);
@@ -465,6 +470,12 @@ static inline int neigh_hh_output(const struct hh_cache *hh, struct sk_buff *skb
 	} while (read_seqretry(&hh->hh_lock, seq));
 
 	skb_push(skb, hh_len);
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+			printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+
 	return dev_queue_xmit(skb);
 }
 

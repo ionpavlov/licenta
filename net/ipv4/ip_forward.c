@@ -38,6 +38,7 @@
 #include <linux/route.h>
 #include <net/route.h>
 #include <net/xfrm.h>
+#include <net/rdtsc.h>
 
 static bool ip_exceeds_mtu(const struct sk_buff *skb, unsigned int mtu)
 {
@@ -82,6 +83,11 @@ int ip_forward(struct sk_buff *skb)
 	struct rtable *rt;	/* Route we use */
 	struct ip_options *opt	= &(IPCB(skb)->opt);
 	struct net *net;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	/* that should never happen */
 	if (skb->pkt_type != PACKET_HOST)
@@ -144,6 +150,12 @@ int ip_forward(struct sk_buff *skb)
 		ip_rt_send_redirect(skb);
 
 	skb->priority = rt_tos2priority(iph->tos);
+
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
 		       net, NULL, skb, skb->dev, rt->dst.dev,

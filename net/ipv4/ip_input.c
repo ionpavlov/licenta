@@ -147,6 +147,7 @@
 #include <linux/mroute.h>
 #include <linux/netlink.h>
 #include <net/dst_metadata.h>
+#include <net/rdtsc.h>
 
 /*
  *	Process Router Attention IP option (RFC 2113)
@@ -315,7 +316,11 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
 	const struct iphdr *iph = ip_hdr(skb);
 	struct rtable *rt;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
 
+	/* initial counter set */
+	delta = rdtsc();
 	if (sysctl_ip_early_demux && !skb_dst(skb) && !skb->sk) {
 		const struct net_protocol *ipprot;
 		int protocol = iph->protocol;
@@ -362,6 +367,12 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	} else if (rt->rt_type == RTN_BROADCAST)
 		IP_UPD_PO_STATS_BH(net, IPSTATS_MIB_INBCAST, skb->len);
 
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+
 	return dst_input(skb);
 
 drop:
@@ -377,6 +388,11 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	const struct iphdr *iph;
 	struct net *net;
 	u32 len;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
@@ -451,6 +467,12 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 
 	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
+
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,

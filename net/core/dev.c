@@ -3078,6 +3078,11 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	struct netdev_queue *txq;
 	struct Qdisc *q;
 	int rc = -ENOMEM;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	skb_reset_mac_header(skb);
 
@@ -3112,6 +3117,11 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	txq = netdev_pick_tx(dev, skb, accel_priv);
 	q = rcu_dereference_bh(txq->qdisc);
 
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter == PKTSTAMP)
+		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
 #ifdef CONFIG_NET_CLS_ACT
 	skb->tc_verd = SET_TC_AT(skb->tc_verd, AT_EGRESS);
 #endif

@@ -81,6 +81,7 @@
 #include <linux/tcp.h>
 #include <net/rdtsc.h>
 
+#define PKTSTAMP 20
 int sysctl_ip_default_ttl __read_mostly = IPDEFTTL;
 EXPORT_SYMBOL(sysctl_ip_default_ttl);
 
@@ -183,6 +184,7 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	u32 nexthop;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
@@ -212,11 +214,17 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
+
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-			printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
+
 	if (!IS_ERR(neigh)) {
 		int res = dst_neigh_output(dst, neigh, skb);
 

@@ -149,6 +149,7 @@
 #include <net/dst_metadata.h>
 #include <net/rdtsc.h>
 
+#define PKTSTAMP 20
 /*
  *	Process Router Attention IP option (RFC 2113)
  */
@@ -318,6 +319,7 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	struct rtable *rt;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
@@ -370,8 +372,13 @@ static int ip_rcv_finish(struct net *net, struct sock *sk, struct sk_buff *skb)
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
+
 
 	return dst_input(skb);
 
@@ -390,6 +397,7 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	u32 len;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
@@ -471,8 +479,13 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0
+		limit_step++;
+	}
+
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,

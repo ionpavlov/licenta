@@ -28,6 +28,7 @@
 #include <net/busy_poll.h>
 #include "i40e.h"
 #include "i40e_prototype.h"
+#include <net/rdtsc.h>
 
 static inline __le64 build_ctob(u32 td_cmd, u32 td_offset, unsigned int size,
 				u32 td_tag)
@@ -639,7 +640,11 @@ static bool i40e_clean_tx_irq(struct i40e_ring *tx_ring, int budget)
 	struct i40e_tx_desc *tx_desc;
 	unsigned int total_packets = 0;
 	unsigned int total_bytes = 0;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;;
+	static uint64_t limit = 1;
 
+	delta = rdtsc();
 	tx_buf = &tx_ring->tx_bi[i];
 	tx_desc = I40E_TX_DESC(tx_ring, i);
 	i -= tx_ring->count;
@@ -718,6 +723,7 @@ static bool i40e_clean_tx_irq(struct i40e_ring *tx_ring, int budget)
 		budget--;
 	} while (likely(budget));
 
+
 	i += tx_ring->count;
 	tx_ring->next_to_clean = i;
 	u64_stats_update_begin(&tx_ring->syncp);
@@ -762,6 +768,15 @@ static bool i40e_clean_tx_irq(struct i40e_ring *tx_ring, int budget)
 					    tx_ring->queue_index);
 			++tx_ring->tx_stats.restart_queue;
 		}
+	}
+
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter += total_packets;
+	if (counter/(1<<PKTSTAMP) == limit) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			 __FILE__, __LINE__, __FUNCTION__, counter, total_cycles);
+		limit++;
 	}
 
 	return !!budget;
@@ -1476,14 +1491,20 @@ static int i40e_clean_rx_irq_ps(struct i40e_ring *rx_ring, int budget)
 	u32 rx_error, rx_status;
 	u8 rx_ptype;
 	u64 qword;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit = 1;
 
 	if (budget <= 0)
 		return 0;
-
+	
 	do {
 		struct i40e_rx_buffer *rx_bi;
 		struct sk_buff *skb;
 		u16 vlan_tag;
+
+		/* initial counter set */
+		delta = rdtsc();
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= I40E_RX_BUFFER_WRITE) {
 			i40e_alloc_rx_buffers_ps(rx_ring, cleaned_count);
@@ -1633,6 +1654,15 @@ static int i40e_clean_rx_irq_ps(struct i40e_ring *rx_ring, int budget)
 		}
 #endif
 		skb_mark_napi_id(skb, &rx_ring->q_vector->napi);
+
+		delta = rdtsc() - delta;
+		total_cycles += delta;
+		counter++;
+		if (counter/(1<<PKTSTAMP) == limit) {
+			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, counter, total_cycles);
+		}
+
 		i40e_receive_skb(rx_ring, skb, vlan_tag);
 
 		rx_desc->wb.qword1.status_error_len = 0;
@@ -1667,11 +1697,17 @@ static int i40e_clean_rx_irq_1buf(struct i40e_ring *rx_ring, int budget)
 	u8 rx_ptype;
 	u64 qword;
 	u16 i;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit = 1;
 
 	do {
 		struct i40e_rx_buffer *rx_bi;
 		struct sk_buff *skb;
 		u16 vlan_tag;
+
+		/* initial counter set */
+		delta = rdtsc();
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= I40E_RX_BUFFER_WRITE) {
 			i40e_alloc_rx_buffers_1buf(rx_ring, cleaned_count);
@@ -1762,6 +1798,14 @@ static int i40e_clean_rx_irq_1buf(struct i40e_ring *rx_ring, int budget)
 			continue;
 		}
 #endif
+		delta = rdtsc() - delta;
+		total_cycles += delta;
+		counter++;
+		if (counter/(1<<PKTSTAMP) == limit) {
+			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, counter, total_cycles);
+		}
+	
 		i40e_receive_skb(rx_ring, skb, vlan_tag);
 
 		rx_desc->wb.qword1.status_error_len = 0;

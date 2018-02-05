@@ -140,6 +140,7 @@
 
 #include "net-sysfs.h"
 
+#include <net/rdtsc.h>
 /* Instead of increasing this, you should create a hash table. */
 #define MAX_GRO_SKBS 8
 
@@ -3080,6 +3081,7 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	int rc = -ENOMEM;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
@@ -3120,8 +3122,12 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, counter, total_cycles);
+		limit++;
+	}
+
 #ifdef CONFIG_NET_CLS_ACT
 	skb->tc_verd = SET_TC_AT(skb->tc_verd, AT_EGRESS);
 #endif
@@ -3861,7 +3867,7 @@ another_round:
 
 	if (pfmemalloc)
 		goto skip_taps;
-
+	
 	list_for_each_entry_rcu(ptype, &ptype_all, list) {
 		if (pt_prev)
 			ret = deliver_skb(skb, pt_prev, orig_dev);

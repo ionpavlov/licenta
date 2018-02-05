@@ -53,6 +53,7 @@
 #include <net/vxlan.h>
 #include <net/rdtsc.h>
 
+#define PKTSTAMP 20
 #ifdef CONFIG_OF
 #include <linux/of_net.h>
 #endif
@@ -2059,6 +2060,8 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	static uint64_t total_cycles_ixgbe_alloc_rx_buffers = 0;
 	static uint64_t total_cycles_ixgbe_fetch_rx_buffer = 0;
 	static uint64_t total_cycles_ixgbe_process_skb_fields = 0;
+	static uint64_t total_cycles_ixgbe_rx_skb = 0
+	static uint64_t limit_step = 1;
 
 	while (likely(total_rx_packets < budget)) {
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -2140,7 +2143,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 #endif /* IXGBE_FCOE */
 		skb_mark_napi_id(skb, &q_vector->napi);
+		delta = rdtsc();
 		ixgbe_rx_skb(q_vector, skb);
+		delta = rdtsc() - delta();
+		total_cycles_ixgbe_rx_skb += delta;
 
 		/* update budget accounting */
 		total_rx_packets++;
@@ -2149,11 +2155,17 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	/* count processed packets */
 	counter += total_rx_packets;
 	/* print times on PKTSTAMP */
-	if (counter == PKTSTAMP) {
-		printk(KERN_INFO "%s:%d (%s) PKTSTAMP = %d", __FILE__, __LINE__, __FUNCTION__, PKTSTAMP);
-		printk(KERN_INFO "total_cycles_ixgbe_alloc_rx_buffers = %lld\n", total_cycles_ixgbe_alloc_rx_buffers);
-		printk(KERN_INFO "total_cycles_ixgbe_fetch_rx_buffer = %lld\n", total_cycles_ixgbe_fetch_rx_buffer);
-		printk(KERN_INFO "total_cycles_ixgbe_process_skb_fields = %lld\n", total_cycles_ixgbe_process_skb_fields);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) counter = %lld\n", __FILE__, __LINE__, __FUNCTION__, (long long)counter);
+		printk(KERN_INFO "total_cycles_ixgbe_alloc_rx_buffers = %lld\n", (long long)total_cycles_ixgbe_alloc_rx_buffers);
+		printk(KERN_INFO "total_cycles_ixgbe_fetch_rx_buffer = %lld\n", (long long)total_cycles_ixgbe_fetch_rx_buffer);
+		printk(KERN_INFO "total_cycles_ixgbe_process_skb_fields = %lld\n", (long long)total_cycles_ixgbe_process_skb_fields);
+		printk(KERN_INFO "total_cycles_ixgbe_rx_skb = %lld\n", (long long)total_cycles_ixgbe_rx_skb);
+		total_cycles_ixgbe_alloc_rx_buffers = 0;
+		total_cycles_ixgbe_fetch_rx_buffer = 0;
+		total_cycles_ixgbe_process_skb_fields = 0;
+		total_cycles_ixgbe_rx_skb = 0;
+		limit_step++;
 	}
 
 	u64_stats_update_begin(&rx_ring->syncp);
@@ -2803,6 +2815,9 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	struct ixgbe_ring *ring;
 	int per_ring_budget, work_done = 0;
 	bool clean_complete = true;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 #ifdef CONFIG_IXGBE_DCA
 	if (adapter->flags & IXGBE_FLAG_DCA_ENABLED)
@@ -2822,12 +2837,22 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	else
 		per_ring_budget = budget;
 
+	delta = rdtsc();
 	ixgbe_for_each_ring(ring, q_vector->rx) {
 		int cleaned = ixgbe_clean_rx_irq(q_vector, ring,
 						 per_ring_budget);
 
 		work_done += cleaned;
 		clean_complete &= (cleaned < per_ring_budget);
+		counter += cleaned;
+	}
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
+				__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+				total_cycles = 0;
+				limit_step++;
 	}
 
 	ixgbe_qv_unlock_napi(q_vector);

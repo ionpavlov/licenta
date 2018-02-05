@@ -40,6 +40,7 @@
 #include <net/xfrm.h>
 #include <net/rdtsc.h>
 
+#define PKTSTAMP 20
 static bool ip_exceeds_mtu(const struct sk_buff *skb, unsigned int mtu)
 {
 	if (skb->len <= mtu)
@@ -85,6 +86,7 @@ int ip_forward(struct sk_buff *skb)
 	struct net *net;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
@@ -154,8 +156,12 @@ int ip_forward(struct sk_buff *skb)
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-		printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
 		       net, NULL, skb, skb->dev, rt->dst.dev,

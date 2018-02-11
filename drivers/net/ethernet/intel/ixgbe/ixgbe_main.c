@@ -1100,6 +1100,12 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int total_bytes = 0, total_packets = 0;
 	unsigned int budget = q_vector->tx.work_limit;
 	unsigned int i = tx_ring->next_to_clean;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
@@ -1188,6 +1194,17 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	u64_stats_update_end(&tx_ring->syncp);
 	q_vector->tx.total_bytes += total_bytes;
 	q_vector->tx.total_packets += total_packets;
+	
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter += total_packets;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
 
 	if (check_for_tx_hang(tx_ring) && ixgbe_check_tx_hang(tx_ring)) {
 		/* schedule immediate reset if we believe we hung */
@@ -2060,7 +2077,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	static uint64_t total_cycles_ixgbe_alloc_rx_buffers = 0;
 	static uint64_t total_cycles_ixgbe_fetch_rx_buffer = 0;
 	static uint64_t total_cycles_ixgbe_process_skb_fields = 0;
-	static uint64_t total_cycles_ixgbe_rx_skb = 0
+	static uint64_t total_cycles_ixgbe_rx_skb = 0;
 	static uint64_t limit_step = 1;
 
 	while (likely(total_rx_packets < budget)) {
@@ -2145,7 +2162,7 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		skb_mark_napi_id(skb, &q_vector->napi);
 		delta = rdtsc();
 		ixgbe_rx_skb(q_vector, skb);
-		delta = rdtsc() - delta();
+		delta = rdtsc() - delta;
 		total_cycles_ixgbe_rx_skb += delta;
 
 		/* update budget accounting */
@@ -7244,6 +7261,12 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 	u32 tx_flags = first->tx_flags;
 	u32 cmd_type = ixgbe_tx_cmd_type(skb, tx_flags);
 	u16 i = tx_ring->next_to_use;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	tx_desc = IXGBE_TX_DESC(tx_ring, i);
 
@@ -7360,6 +7383,16 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 		mmiowb();
 	}
 
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
 	return;
 dma_error:
 	dev_err(tx_ring->dev, "TX DMA map failed\n");
@@ -7550,7 +7583,12 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 	u16 count = TXD_USE_COUNT(skb_headlen(skb));
 	__be16 protocol = skb->protocol;
 	u8 hdr_len = 0;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
+	/* initial counter set */
+	delta = rdtsc();
 	/*
 	 * need: 1 descriptor per page * PAGE_SIZE/IXGBE_MAX_DATA_PER_TXD,
 	 *       + 1 desc for skb_headlen/IXGBE_MAX_DATA_PER_TXD,
@@ -7659,6 +7697,16 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 	if (test_bit(__IXGBE_TX_FDIR_INIT_DONE, &tx_ring->state))
 		ixgbe_atr(tx_ring, first);
 
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
 #ifdef IXGBE_FCOE
 xmit_fcoe:
 #endif /* IXGBE_FCOE */

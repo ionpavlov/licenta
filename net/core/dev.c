@@ -3081,10 +3081,10 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	int rc = -ENOMEM;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit = 1;
-
-	/* initial counter set */
-	delta = rdtsc();
+	static uint64_t limit_step = 1;
+	uint64_t delta_netdev_pick_tx;
+	static uint64_t counter_netdev_pick_tx = 0, total_cycles_netdev_pick_tx = 0;
+	static uint64_t limit_step_netdev_pick_tx = 1;
 
 	skb_reset_mac_header(skb);
 
@@ -3116,16 +3116,19 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	}
 #endif
 
+	/* initial counter set */
+	delta_netdev_pick_tx = rdtsc();
 	txq = netdev_pick_tx(dev, skb, accel_priv);
 	q = rcu_dereference_bh(txq->qdisc);
-
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, counter, total_cycles);
-		limit++;
+	/* increase the counters */
+	delta_netdev_pick_tx = rdtsc() - delta_netdev_pick_tx;
+	total_cycles_netdev_pick_tx += delta_netdev_pick_tx;
+	counter_netdev_pick_tx++;
+	if (counter_netdev_pick_tx/(1<<PKTSTAMP) == limit_step_netdev_pick_tx) {
+		printk(KERN_INFO "%s:%d (%s) pkts_netdev_pick_tx = %lld total_cycles_netdev_pick_tx = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter_netdev_pick_tx, (long long)total_cycles_netdev_pick_tx);
+		total_cycles_netdev_pick_tx = 0;
+		limit_step_netdev_pick_tx++;
 	}
 
 #ifdef CONFIG_NET_CLS_ACT
@@ -3136,6 +3139,17 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 		rc = __dev_xmit_skb(skb, q, dev, txq);
 		goto out;
 	}
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
+
 
 	/* The device has no queue. Common case for software devices:
 	   loopback, all the sorts of tunnels...
@@ -3621,6 +3635,12 @@ EXPORT_SYMBOL(netif_rx_ni);
 static void net_tx_action(struct softirq_action *h)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
+
+	/* initial counter set */
+	delta = rdtsc();
 
 	if (sd->completion_queue) {
 		struct sk_buff *clist;
@@ -3640,6 +3660,7 @@ static void net_tx_action(struct softirq_action *h)
 			else
 				trace_kfree_skb(skb, net_tx_action);
 			__kfree_skb(skb);
+			counter++;
 		}
 	}
 
@@ -3676,6 +3697,14 @@ static void net_tx_action(struct softirq_action *h)
 				}
 			}
 		}
+	}
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+			total_cycles = 0;
+			limit_step++;
 	}
 }
 

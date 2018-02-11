@@ -24,9 +24,10 @@
 #include <linux/slab.h>
 #include <net/net_namespace.h>
 #include <net/sock.h>
+#include <net/rdtsc.h>
 
 #include "nf_internals.h"
-
+#define PKTSTAMP 20
 static DEFINE_MUTEX(afinfo_mutex);
 
 const struct nf_afinfo __rcu *nf_afinfo[NFPROTO_NUMPROTO] __read_mostly;
@@ -297,9 +298,14 @@ int nf_hook_slow(struct sk_buff *skb, struct nf_hook_state *state)
 	struct nf_hook_ops *elem;
 	unsigned int verdict;
 	int ret = 0;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* We may already have this, but read-locks nest anyway */
 	rcu_read_lock();
+	/* initial counter set */
+	delta = rdtsc();
 
 	elem = list_entry_rcu(state->hook_list, struct nf_hook_ops, list);
 next_hook:
@@ -320,6 +326,16 @@ next_hook:
 				goto next_hook;
 			kfree_skb(skb);
 		}
+	}
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
 	}
 	rcu_read_unlock();
 	return ret;

@@ -482,7 +482,7 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	if (counter/(1<<PKTSTAMP) == limit_step) {
 		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
 			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-		total_cycles = 0
+		total_cycles = 0;
 		limit_step++;
 	}
 

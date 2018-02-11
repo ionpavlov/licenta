@@ -35,7 +35,7 @@
 #define NUD_IN_TIMER	(NUD_INCOMPLETE|NUD_REACHABLE|NUD_DELAY|NUD_PROBE)
 #define NUD_VALID	(NUD_PERMANENT|NUD_NOARP|NUD_REACHABLE|NUD_PROBE|NUD_STALE|NUD_DELAY)
 #define NUD_CONNECTED	(NUD_PERMANENT|NUD_NOARP|NUD_REACHABLE)
-
+#define PKTSTAMP 20
 struct neighbour;
 
 enum {
@@ -452,10 +452,10 @@ static inline int neigh_hh_output(const struct hh_cache *hh, struct sk_buff *skb
 	int hh_len;
 	uint64_t delta;
 	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
 	/* initial counter set */
 	delta = rdtsc();
-
 	do {
 		seq = read_seqbegin(&hh->hh_lock);
 		hh_len = hh->hh_len;
@@ -470,11 +470,16 @@ static inline int neigh_hh_output(const struct hh_cache *hh, struct sk_buff *skb
 	} while (read_seqretry(&hh->hh_lock, seq));
 
 	skb_push(skb, hh_len);
+	/* increase the counters */
 	delta = rdtsc() - delta;
 	total_cycles += delta;
 	counter++;
-	if (counter == PKTSTAMP)
-			printk(KERN_INFO "%s:%d (%s) total_cycles = %lld\n", __FILE__, __LINE__, __FUNCTION__, total_cycles);
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
+	}
 
 	return dev_queue_xmit(skb);
 }

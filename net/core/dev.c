@@ -2875,6 +2875,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spinlock_t *root_lock = qdisc_lock(q);
 	bool contended;
 	int rc;
+	uint64_t delta;
+	static uint64_t enqueue_counter = 0, enqueue_total_cycles = 0;
+	static uint64_t enqueue_limit_step = 1;
 
 	qdisc_pkt_len_init(skb);
 	qdisc_calculate_pkt_len(skb, q);
@@ -2913,7 +2916,20 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 		rc = NET_XMIT_SUCCESS;
 	} else {
+		/* initial counter set */
+		delta = rdtsc();
 		rc = q->enqueue(skb, q) & NET_XMIT_MASK;
+		/* increase the counters */
+		delta = rdtsc() - delta;
+		enqueue_total_cycles += delta;
+		enqueue_counter++;
+		if (enqueue_counter/(1<<PKTSTAMP) == enqueue_limit_step) {
+			printk(KERN_INFO "%s:%d (%s) pkts = %lld enqueue_total_cycles = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, (long long)enqueue_counter, (long long)enqueue_total_cycles);
+			enqueue_total_cycles = 0;
+			enqueue_limit_step++;
+		}
+
 		if (qdisc_run_begin(q)) {
 			if (unlikely(contended)) {
 				spin_unlock(&q->busylock);
@@ -3080,12 +3096,11 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	struct Qdisc *q;
 	int rc = -ENOMEM;
 	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
 	uint64_t delta_netdev_pick_tx;
 	static uint64_t counter_netdev_pick_tx = 0, total_cycles_netdev_pick_tx = 0;
 	static uint64_t limit_step_netdev_pick_tx = 1;
 
+	delta = rdtsc();
 	skb_reset_mac_header(skb);
 
 	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP))
@@ -3139,17 +3154,6 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 		rc = __dev_xmit_skb(skb, q, dev, txq);
 		goto out;
 	}
-	/* increase the counters */
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-		total_cycles = 0;
-		limit_step++;
-	}
-
 
 	/* The device has no queue. Common case for software devices:
 	   loopback, all the sorts of tunnels...

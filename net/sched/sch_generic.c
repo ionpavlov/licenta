@@ -84,7 +84,12 @@ static struct sk_buff *dequeue_skb(struct Qdisc *q, bool *validate,
 {
 	struct sk_buff *skb = q->gso_skb;
 	const struct netdev_queue *txq = q->dev_queue;
+	uint64_t delta;
+	static uint64_t counter = 0, total_cycles = 0;
+	static uint64_t limit_step = 1;
 
+	/* initial counter set */
+	delta = rdtsc();
 	*packets = 1;
 	*validate = true;
 	if (unlikely(skb)) {
@@ -104,6 +109,16 @@ static struct sk_buff *dequeue_skb(struct Qdisc *q, bool *validate,
 			if (skb && qdisc_may_bulk(q))
 				try_bulk_dequeue_skb(q, skb, txq, packets);
 		}
+	}
+	/* increase the counters */
+	delta = rdtsc() - delta;
+	total_cycles += delta;
+	counter++;
+	if (counter/(1<<PKTSTAMP) == limit_step) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+		total_cycles = 0;
+		limit_step++;
 	}
 	return skb;
 }

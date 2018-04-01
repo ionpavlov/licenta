@@ -53,7 +53,6 @@
 #include <net/vxlan.h>
 #include <net/rdtsc.h>
 
-#define PKTSTAMP 20
 #ifdef CONFIG_OF
 #include <linux/of_net.h>
 #endif
@@ -1100,12 +1099,12 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int total_bytes = 0, total_packets = 0;
 	unsigned int budget = q_vector->tx.work_limit;
 	unsigned int i = tx_ring->next_to_clean;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
+	start = rdtsc();
 
 	if (test_bit(__IXGBE_DOWN, &adapter->state))
 		return true;
@@ -1195,15 +1194,16 @@ static bool ixgbe_clean_tx_irq(struct ixgbe_q_vector *q_vector,
 	q_vector->tx.total_bytes += total_bytes;
 	q_vector->tx.total_packets += total_packets;
 	
-	/* increase the counters */
-	delta = rdtsc() - delta;
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
 	total_cycles += delta;
-	counter += total_packets;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
 		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
 		total_cycles = 0;
-		limit_step++;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
 
 	if (check_for_tx_hang(tx_ring) && ixgbe_check_tx_hang(tx_ring)) {
@@ -1913,6 +1913,9 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 {
 	struct page *page = rx_buffer->page;
 	unsigned int size = le16_to_cpu(rx_desc->wb.upper.length);
+	uint64_t delta, start = 0, stop = 0;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 #if (PAGE_SIZE < 8192)
 	unsigned int truesize = ixgbe_rx_bufsz(rx_ring);
 #else
@@ -1921,6 +1924,7 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 				   ixgbe_rx_bufsz(rx_ring);
 #endif
 
+	start = rdtsc();
 	if ((size <= IXGBE_RX_HDR_SIZE) && !skb_is_nonlinear(skb)) {
 		unsigned char *va = page_address(page) + rx_buffer->page_offset;
 
@@ -1938,6 +1942,16 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page,
 			rx_buffer->page_offset, size, truesize);
 
+	stop = rdtsc();
+	delta = stop - start;
+	total_cycles += delta;
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
+		trace_printk("%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
+		total_cycles = 0;
+		m = (m == MASK0)? MASK1 : MASK0;
+	}
 	/* avoid re-using remote pages */
 	if (unlikely(ixgbe_page_is_reserved(page)))
 		return false;
@@ -1971,6 +1985,11 @@ static struct sk_buff *ixgbe_fetch_rx_buffer(struct ixgbe_ring *rx_ring,
 	struct ixgbe_rx_buffer *rx_buffer;
 	struct sk_buff *skb;
 	struct page *page;
+	static uint64_t pkt_counter = 0;
+	static uint64_t total_cycles_napi_alloc_skb = 0;
+	static uint64_t m = MASK1;
+	uint64_t delta, start = 0, stop = 0;
+
 
 	rx_buffer = &rx_ring->rx_buffer_info[rx_ring->next_to_clean];
 	page = rx_buffer->page;
@@ -1987,10 +2006,20 @@ static struct sk_buff *ixgbe_fetch_rx_buffer(struct ixgbe_ring *rx_ring,
 #if L1_CACHE_BYTES < 128
 		prefetch(page_addr + L1_CACHE_BYTES);
 #endif
-
+		start = rdtsc();
 		/* allocate a skb to store the frags */
 		skb = napi_alloc_skb(&rx_ring->q_vector->napi,
 				     IXGBE_RX_HDR_SIZE);
+		stop = rdtsc();
+		delta = stop - start;
+		total_cycles_napi_alloc_skb += delta;
+		pkt_counter++;
+		if ((pkt_counter&MASK1) == m) {
+			trace_printk("%s:%d (%s) pkts = %lld total_cycles_napi_alloc_skb = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles_napi_alloc_skb);
+			total_cycles_napi_alloc_skb = 0;
+			m = (m == MASK0)? MASK1 : MASK0;
+		}
 		if (unlikely(!skb)) {
 			rx_ring->rx_stats.alloc_rx_buff_failed++;
 			return NULL;
@@ -2072,13 +2101,11 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 	unsigned int mss = 0;
 #endif /* IXGBE_FCOE */
 	u16 cleaned_count = ixgbe_desc_unused(rx_ring);
-	uint64_t delta;
-	static uint64_t counter = 0;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0;
 	static uint64_t total_cycles_ixgbe_alloc_rx_buffers = 0;
-	static uint64_t total_cycles_ixgbe_fetch_rx_buffer = 0;
 	static uint64_t total_cycles_ixgbe_process_skb_fields = 0;
-	static uint64_t total_cycles_ixgbe_rx_skb = 0;
-	static uint64_t limit_step = 1;
+	static uint64_t m = MASK1;
 
 	while (likely(total_rx_packets < budget)) {
 		union ixgbe_adv_rx_desc *rx_desc;
@@ -2086,9 +2113,10 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 		/* return some buffers to hardware, one at a time is too slow */
 		if (cleaned_count >= IXGBE_RX_BUFFER_WRITE) {
-			delta = rdtsc();
+			start = rdtsc();
 			ixgbe_alloc_rx_buffers(rx_ring, cleaned_count);
-			delta = rdtsc() - delta;
+			stop = rdtsc();
+			delta = stop - start;
 			total_cycles_ixgbe_alloc_rx_buffers += delta;
 			cleaned_count = 0;
 		}
@@ -2104,12 +2132,8 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 		 */
 		dma_rmb();
 
-
-		delta = rdtsc();
 		/* retrieve a buffer from the ring */
 		skb = ixgbe_fetch_rx_buffer(rx_ring, rx_desc);
-		delta = rdtsc() - delta;
-		total_cycles_ixgbe_fetch_rx_buffer += delta;
 
 		/* exit if we failed to retrieve a buffer */
 		if (!skb)
@@ -2127,11 +2151,12 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 		/* probably a little skewed due to removing CRC */
 		total_rx_bytes += skb->len;
-
-		delta = rdtsc();
+		
+		start = rdtsc();
 		/* populate checksum, timestamp, VLAN, and protocol */
 		ixgbe_process_skb_fields(rx_ring, rx_desc, skb);
-		delta = rdtsc() - delta;
+		stop = rdtsc();
+		delta = stop - start;
 		total_cycles_ixgbe_process_skb_fields += delta;
 
 #ifdef IXGBE_FCOE
@@ -2160,29 +2185,22 @@ static int ixgbe_clean_rx_irq(struct ixgbe_q_vector *q_vector,
 
 #endif /* IXGBE_FCOE */
 		skb_mark_napi_id(skb, &q_vector->napi);
-		delta = rdtsc();
 		ixgbe_rx_skb(q_vector, skb);
-		delta = rdtsc() - delta;
-		total_cycles_ixgbe_rx_skb += delta;
 
 		/* update budget accounting */
 		total_rx_packets++;
 	}
 
 	/* count processed packets */
-	counter += total_rx_packets;
+	pkt_counter += total_rx_packets;
 	/* print times on PKTSTAMP */
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) counter = %lld\n", __FILE__, __LINE__, __FUNCTION__, (long long)counter);
+	if ((pkt_counter&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld\n", __FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter);
 		printk(KERN_INFO "total_cycles_ixgbe_alloc_rx_buffers = %lld\n", (long long)total_cycles_ixgbe_alloc_rx_buffers);
-		printk(KERN_INFO "total_cycles_ixgbe_fetch_rx_buffer = %lld\n", (long long)total_cycles_ixgbe_fetch_rx_buffer);
 		printk(KERN_INFO "total_cycles_ixgbe_process_skb_fields = %lld\n", (long long)total_cycles_ixgbe_process_skb_fields);
-		printk(KERN_INFO "total_cycles_ixgbe_rx_skb = %lld\n", (long long)total_cycles_ixgbe_rx_skb);
 		total_cycles_ixgbe_alloc_rx_buffers = 0;
-		total_cycles_ixgbe_fetch_rx_buffer = 0;
 		total_cycles_ixgbe_process_skb_fields = 0;
-		total_cycles_ixgbe_rx_skb = 0;
-		limit_step++;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
 
 	u64_stats_update_begin(&rx_ring->syncp);
@@ -2832,9 +2850,6 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	struct ixgbe_ring *ring;
 	int per_ring_budget, work_done = 0;
 	bool clean_complete = true;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
 
 #ifdef CONFIG_IXGBE_DCA
 	if (adapter->flags & IXGBE_FLAG_DCA_ENABLED)
@@ -2854,22 +2869,12 @@ int ixgbe_poll(struct napi_struct *napi, int budget)
 	else
 		per_ring_budget = budget;
 
-	delta = rdtsc();
 	ixgbe_for_each_ring(ring, q_vector->rx) {
 		int cleaned = ixgbe_clean_rx_irq(q_vector, ring,
 						 per_ring_budget);
 
 		work_done += cleaned;
 		clean_complete &= (cleaned < per_ring_budget);
-		counter += cleaned;
-	}
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
-				__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-				total_cycles = 0;
-				limit_step++;
 	}
 
 	ixgbe_qv_unlock_napi(q_vector);
@@ -7261,13 +7266,12 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 	u32 tx_flags = first->tx_flags;
 	u32 cmd_type = ixgbe_tx_cmd_type(skb, tx_flags);
 	u16 i = tx_ring->next_to_use;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
-
+	start = rdtsc();
 	tx_desc = IXGBE_TX_DESC(tx_ring, i);
 
 	ixgbe_tx_olinfo_status(tx_desc, tx_flags, skb->len - hdr_len);
@@ -7383,15 +7387,16 @@ static void ixgbe_tx_map(struct ixgbe_ring *tx_ring,
 		mmiowb();
 	}
 
-	/* increase the counters */
-	delta = rdtsc() - delta;
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
 	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
 		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
 		total_cycles = 0;
-		limit_step++;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
 	return;
 dma_error:
@@ -7583,12 +7588,12 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 	u16 count = TXD_USE_COUNT(skb_headlen(skb));
 	__be16 protocol = skb->protocol;
 	u8 hdr_len = 0;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
+	start = rdtsc();
 	/*
 	 * need: 1 descriptor per page * PAGE_SIZE/IXGBE_MAX_DATA_PER_TXD,
 	 *       + 1 desc for skb_headlen/IXGBE_MAX_DATA_PER_TXD,
@@ -7697,15 +7702,16 @@ netdev_tx_t ixgbe_xmit_frame_ring(struct sk_buff *skb,
 	if (test_bit(__IXGBE_TX_FDIR_INIT_DONE, &tx_ring->state))
 		ixgbe_atr(tx_ring, first);
 
-	/* increase the counters */
-	delta = rdtsc() - delta;
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
 	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
 		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
 		total_cycles = 0;
-		limit_step++;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
 #ifdef IXGBE_FCOE
 xmit_fcoe:

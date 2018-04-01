@@ -220,7 +220,7 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	counter++;
 	if (counter/(1<<PKTSTAMP) == limit_step) {
 		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles)
+			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
 		total_cycles = 0;
 		limit_step++;
 	}

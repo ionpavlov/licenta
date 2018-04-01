@@ -395,13 +395,12 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	const struct iphdr *iph;
 	struct net *net;
 	u32 len;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
-
+	start = rdtsc();
 	/* When the interface is in promisc. mode, drop all the crap
 	 * that it receives, do not try to analyse it.
 	 */
@@ -476,16 +475,17 @@ int ip_rcv(struct sk_buff *skb, struct net_device *dev, struct packet_type *pt, 
 	/* Must drop socket now because of tproxy. */
 	skb_orphan(skb);
 
-	delta = rdtsc() - delta;
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
 	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
 		total_cycles = 0;
-		limit_step++;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
-
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 		       net, NULL, skb, dev, NULL,

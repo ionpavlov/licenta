@@ -2875,9 +2875,9 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spinlock_t *root_lock = qdisc_lock(q);
 	bool contended;
 	int rc;
-	uint64_t delta;
-	static uint64_t enqueue_counter = 0, enqueue_total_cycles = 0;
-	static uint64_t enqueue_limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t enqueue_pkt_counter = 0, enqueue_total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	qdisc_pkt_len_init(skb);
 	qdisc_calculate_pkt_len(skb, q);
@@ -2917,17 +2917,18 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 		rc = NET_XMIT_SUCCESS;
 	} else {
 		/* initial counter set */
-		delta = rdtsc();
+		start = rdtsc();
 		rc = q->enqueue(skb, q) & NET_XMIT_MASK;
 		/* increase the counters */
-		delta = rdtsc() - delta;
+		stop = rdtsc();
+		delta = stop - start;
 		enqueue_total_cycles += delta;
-		enqueue_counter++;
-		if (enqueue_counter/(1<<PKTSTAMP) == enqueue_limit_step) {
-			printk(KERN_INFO "%s:%d (%s) pkts = %lld enqueue_total_cycles = %lld\n",
-				__FILE__, __LINE__, __FUNCTION__, (long long)enqueue_counter, (long long)enqueue_total_cycles);
+		enqueue_pkt_counter++;
+		if ((enqueue_pkt_counter&MASK1) == m) {
+			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, (long long)enqueue_pkt_counter, (long long)enqueue_total_cycles);
 			enqueue_total_cycles = 0;
-			enqueue_limit_step++;
+			m = (m == MASK0)? MASK1 : MASK0;
 		}
 
 		if (qdisc_run_begin(q)) {
@@ -3095,12 +3096,10 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	struct netdev_queue *txq;
 	struct Qdisc *q;
 	int rc = -ENOMEM;
-	uint64_t delta;
-	uint64_t delta_netdev_pick_tx;
-	static uint64_t counter_netdev_pick_tx = 0, total_cycles_netdev_pick_tx = 0;
-	static uint64_t limit_step_netdev_pick_tx = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter_netdev_pick_tx = 0, total_cycles_netdev_pick_tx = 0;
+	static uint64_t m = MASK1;
 
-	delta = rdtsc();
 	skb_reset_mac_header(skb);
 
 	if (unlikely(skb_shinfo(skb)->tx_flags & SKBTX_SCHED_TSTAMP))
@@ -3132,18 +3131,19 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 #endif
 
 	/* initial counter set */
-	delta_netdev_pick_tx = rdtsc();
+	start = rdtsc();
 	txq = netdev_pick_tx(dev, skb, accel_priv);
 	q = rcu_dereference_bh(txq->qdisc);
 	/* increase the counters */
-	delta_netdev_pick_tx = rdtsc() - delta_netdev_pick_tx;
-	total_cycles_netdev_pick_tx += delta_netdev_pick_tx;
-	counter_netdev_pick_tx++;
-	if (counter_netdev_pick_tx/(1<<PKTSTAMP) == limit_step_netdev_pick_tx) {
-		printk(KERN_INFO "%s:%d (%s) pkts_netdev_pick_tx = %lld total_cycles_netdev_pick_tx = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter_netdev_pick_tx, (long long)total_cycles_netdev_pick_tx);
-		total_cycles_netdev_pick_tx = 0;
-		limit_step_netdev_pick_tx++;
+	stop = rdtsc();
+	delta = stop - start;
+	total_cycles_netdev_pick_tx += delta;
+	pkt_counter_netdev_pick_tx++;
+	if ((pkt_counter_netdev_pick_tx&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts_counter_netdev_pick_tx = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter_netdev_pick_tx, (long long)total_cycles_netdev_pick_tx);
+		total_cycles_netdev_pick_tx= 0;
+		m = (m == MASK0)? MASK1 : MASK0;
 	}
 
 #ifdef CONFIG_NET_CLS_ACT
@@ -3639,12 +3639,6 @@ EXPORT_SYMBOL(netif_rx_ni);
 static void net_tx_action(struct softirq_action *h)
 {
 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
-
-	/* initial counter set */
-	delta = rdtsc();
 
 	if (sd->completion_queue) {
 		struct sk_buff *clist;
@@ -3664,7 +3658,6 @@ static void net_tx_action(struct softirq_action *h)
 			else
 				trace_kfree_skb(skb, net_tx_action);
 			__kfree_skb(skb);
-			counter++;
 		}
 	}
 
@@ -3701,14 +3694,6 @@ static void net_tx_action(struct softirq_action *h)
 				}
 			}
 		}
-	}
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-			total_cycles = 0;
-			limit_step++;
 	}
 }
 

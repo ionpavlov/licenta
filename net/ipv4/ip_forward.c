@@ -84,13 +84,12 @@ int ip_forward(struct sk_buff *skb)
 	struct rtable *rt;	/* Route we use */
 	struct ip_options *opt	= &(IPCB(skb)->opt);
 	struct net *net;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
-
+	start = rdtsc();
 	/* that should never happen */
 	if (skb->pkt_type != PACKET_HOST)
 		goto drop;
@@ -153,15 +152,6 @@ int ip_forward(struct sk_buff *skb)
 
 	skb->priority = rt_tos2priority(iph->tos);
 
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n", 
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-		total_cycles = 0;
-		limit_step++;
-	}
 
 	return NF_HOOK(NFPROTO_IPV4, NF_INET_FORWARD,
 		       net, NULL, skb, skb->dev, rt->dst.dev,

@@ -2333,10 +2333,29 @@ EXPORT_SYMBOL(__dev_kfree_skb_irq);
 
 void __dev_kfree_skb_any(struct sk_buff *skb, enum skb_free_reason reason)
 {
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
+	/* initial counter set */
+	start = rdtsc();
+
 	if (in_irq() || irqs_disabled())
 		__dev_kfree_skb_irq(skb, reason);
 	else
 		dev_kfree_skb(skb);
+
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
+	total_cycles += delta;
+	pkt_counter++;
+
+	if ((pkt_counter&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
+		total_cycles = 0;
+		m = (m == MASK0)? MASK1 : MASK0;
+	}
 }
 EXPORT_SYMBOL(__dev_kfree_skb_any);
 
@@ -2875,9 +2894,6 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 	spinlock_t *root_lock = qdisc_lock(q);
 	bool contended;
 	int rc;
-	uint64_t delta, start, stop;
-	static uint64_t enqueue_pkt_counter = 0, enqueue_total_cycles = 0;
-	static uint64_t m = MASK1;
 
 	qdisc_pkt_len_init(skb);
 	qdisc_calculate_pkt_len(skb, q);
@@ -2916,20 +2932,7 @@ static inline int __dev_xmit_skb(struct sk_buff *skb, struct Qdisc *q,
 
 		rc = NET_XMIT_SUCCESS;
 	} else {
-		/* initial counter set */
-		start = rdtsc();
 		rc = q->enqueue(skb, q) & NET_XMIT_MASK;
-		/* increase the counters */
-		stop = rdtsc();
-		delta = stop - start;
-		enqueue_total_cycles += delta;
-		enqueue_pkt_counter++;
-		if ((enqueue_pkt_counter&MASK1) == m) {
-			printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-				__FILE__, __LINE__, __FUNCTION__, (long long)enqueue_pkt_counter, (long long)enqueue_total_cycles);
-			enqueue_total_cycles = 0;
-			m = (m == MASK0)? MASK1 : MASK0;
-		}
 
 		if (qdisc_run_begin(q)) {
 			if (unlikely(contended)) {
@@ -3140,7 +3143,7 @@ static int __dev_queue_xmit(struct sk_buff *skb, void *accel_priv)
 	total_cycles_netdev_pick_tx += delta;
 	pkt_counter_netdev_pick_tx++;
 	if ((pkt_counter_netdev_pick_tx&MASK1) == m) {
-		printk(KERN_INFO "%s:%d (%s) pkts_counter_netdev_pick_tx = %lld total_cycles = %lld\n",
+		printk(KERN_INFO "%s:%d (%s) pkts_counter_netdev_pick_tx = %lld total_cycles_netdev_pick_tx = %lld\n",
 			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter_netdev_pick_tx, (long long)total_cycles_netdev_pick_tx);
 		total_cycles_netdev_pick_tx= 0;
 		m = (m == MASK0)? MASK1 : MASK0;

@@ -182,12 +182,12 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 	unsigned int hh_len = LL_RESERVED_SPACE(dev);
 	struct neighbour *neigh;
 	u32 nexthop;
-	uint64_t delta;
-	static uint64_t counter = 0, total_cycles = 0;
-	static uint64_t limit_step = 1;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter_neigh = 0, total_cycles_neigh = 0;
+	static uint64_t m = MASK1;
 
 	/* initial counter set */
-	delta = rdtsc();
+	start = rdtsc();
 
 	if (rt->rt_type == RTN_MULTICAST) {
 		IP_UPD_PO_STATS(net, IPSTATS_MIB_OUTMCAST, skb->len);
@@ -211,19 +211,24 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 
 	rcu_read_lock_bh();
 	nexthop = (__force u32) rt_nexthop(rt, ip_hdr(skb)->daddr);
+	/* initial counter set */
+	start = rdtsc();
 	neigh = __ipv4_neigh_lookup_noref(dev, nexthop);
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
+	total_cycles_neigh += delta;
+	pkt_counter_neigh++;
+	if ((pkt_counter_neigh&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter_neigh, (long long)total_cycles_neigh);
+		total_cycles_neigh = 0;
+		m = (m == MASK0)? MASK1 : MASK0;
+	}
+
 	if (unlikely(!neigh))
 		neigh = __neigh_create(&arp_tbl, &nexthop, dev, false);
 
-	delta = rdtsc() - delta;
-	total_cycles += delta;
-	counter++;
-	if (counter/(1<<PKTSTAMP) == limit_step) {
-		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)counter, (long long)total_cycles);
-		total_cycles = 0;
-		limit_step++;
-	}
 
 	if (!IS_ERR(neigh)) {
 		int res = dst_neigh_output(dst, neigh, skb);

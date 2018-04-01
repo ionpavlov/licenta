@@ -22,6 +22,7 @@
 #include <net/fib_rules.h>
 #include <net/inetpeer.h>
 #include <linux/percpu.h>
+#include <net/rdtsc.h>
 
 struct fib_config {
 	u8			fc_dst_len;
@@ -232,7 +233,12 @@ static inline int fib_lookup(struct net *net, const struct flowi4 *flp,
 {
 	struct fib_table *tb;
 	int err = -ENETUNREACH;
+	uint64_t delta, start, stop;
+	static uint64_t pkt_counter = 0, total_cycles = 0;
+	static uint64_t m = MASK1;
 
+	/* initial counter set */
+	start = rdtsc();
 	rcu_read_lock();
 
 	tb = fib_get_table(net, RT_TABLE_MAIN);
@@ -243,6 +249,17 @@ static inline int fib_lookup(struct net *net, const struct flowi4 *flp,
 		err = -ENETUNREACH;
 
 	rcu_read_unlock();
+	/* increment the counters */
+	stop = rdtsc();
+	delta = stop - start;
+	total_cycles += delta;
+	pkt_counter++;
+	if ((pkt_counter&MASK1) == m) {
+		printk(KERN_INFO "%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
+		total_cycles = 0;
+		m = (m == MASK0)? MASK1 : MASK0;
+	}
 
 	return err;
 }

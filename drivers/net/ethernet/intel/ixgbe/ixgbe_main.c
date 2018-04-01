@@ -1924,11 +1924,21 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 				   ixgbe_rx_bufsz(rx_ring);
 #endif
 
-	start = rdtsc();
 	if ((size <= IXGBE_RX_HDR_SIZE) && !skb_is_nonlinear(skb)) {
 		unsigned char *va = page_address(page) + rx_buffer->page_offset;
 
+		start = rdtsc();
 		memcpy(__skb_put(skb, size), va, ALIGN(size, sizeof(long)));
+		stop = rdtsc();
+		delta = stop - start;
+		total_cycles += delta;
+		pkt_counter++;
+		if ((pkt_counter&MASK1) == m) {
+			trace_printk("%s:%d (%s) pkts = %lld total_cycles = %lld\n",
+				__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
+			total_cycles = 0;
+			m = (m == MASK0)? MASK1 : MASK0;
+		}
 
 		/* page is not reserved, we can reuse buffer as-is */
 		if (likely(!ixgbe_page_is_reserved(page)))
@@ -1942,16 +1952,6 @@ static bool ixgbe_add_rx_frag(struct ixgbe_ring *rx_ring,
 	skb_add_rx_frag(skb, skb_shinfo(skb)->nr_frags, page,
 			rx_buffer->page_offset, size, truesize);
 
-	stop = rdtsc();
-	delta = stop - start;
-	total_cycles += delta;
-	pkt_counter++;
-	if ((pkt_counter&MASK1) == m) {
-		trace_printk("%s:%d (%s) pkts = %lld total_cycles = %lld\n",
-			__FILE__, __LINE__, __FUNCTION__, (long long)pkt_counter, (long long)total_cycles);
-		total_cycles = 0;
-		m = (m == MASK0)? MASK1 : MASK0;
-	}
 	/* avoid re-using remote pages */
 	if (unlikely(ixgbe_page_is_reserved(page)))
 		return false;
